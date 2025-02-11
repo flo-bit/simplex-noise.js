@@ -326,6 +326,190 @@ export function createNoise3D(random: RandomFn = Math.random): NoiseFunction3D {
   };
 }
 
+
+/**
+ * A function type that returns both the noise value and its derivative.
+ */
+export type NoiseDeriv3D = (x: number, y: number, z: number) => {
+  /** The noise value in the interval [-1,1]. */
+  value: number;
+  /** The derivative with respect to x. */
+  dx: number;
+  /** The derivative with respect to y. */
+  dy: number;
+  /** The derivative with respect to z. */
+  dz: number;
+};
+
+/**
+ * Creates a 3D simplex noise function that also computes its analytical derivative.
+ *
+ * The returned function, when called with coordinates (x, y, z), returns an object with the noise value
+ * and its derivative (dx, dy, dz). (Note: the derivative is computed assuming that the integer cell indices
+ * remain constant—so at the boundaries between cells the derivative is discontinuous.)
+ *
+ * @param random a random function returning numbers in [0,1); defaults to Math.random
+ * @returns {NoiseDeriv3D}
+ */
+export function createNoise3DWithDerivatives(random: RandomFn = Math.random): NoiseDeriv3D {
+  const perm = buildPermutationTable(random);
+  // Precompute gradient components for speed – just like in createNoise3D.
+  const permGrad3x = new Float64Array(perm).map(v => grad3[(v % 12) * 3]);
+  const permGrad3y = new Float64Array(perm).map(v => grad3[(v % 12) * 3 + 1]);
+  const permGrad3z = new Float64Array(perm).map(v => grad3[(v % 12) * 3 + 2]);
+
+  return function noise3DWithDerivatives(x: number, y: number, z: number) {
+    // Skew the input space to determine which simplex cell we're in
+    const s = (x + y + z) * F3;
+    const i = fastFloor(x + s);
+    const j = fastFloor(y + s);
+    const k = fastFloor(z + s);
+    const t = (i + j + k) * G3;
+    const X0 = i - t;
+    const Y0 = j - t;
+    const Z0 = k - t;
+    const x0 = x - X0;
+    const y0 = y - Y0;
+    const z0 = z - Z0;
+
+    // Determine which simplex we are in.
+    let i1: number, j1: number, k1: number;
+    let i2: number, j2: number, k2: number;
+    if (x0 >= y0) {
+      if (y0 >= z0) {
+        // X Y Z order
+        i1 = 1; j1 = 0; k1 = 0;
+        i2 = 1; j2 = 1; k2 = 0;
+      } else if (x0 >= z0) {
+        // X Z Y order
+        i1 = 1; j1 = 0; k1 = 0;
+        i2 = 1; j2 = 0; k2 = 1;
+      } else {
+        // Z X Y order
+        i1 = 0; j1 = 0; k1 = 1;
+        i2 = 1; j2 = 0; k2 = 1;
+      }
+    } else {
+      // x0 < y0
+      if (y0 < z0) {
+        // Z Y X order
+        i1 = 0; j1 = 0; k1 = 1;
+        i2 = 0; j2 = 1; k2 = 1;
+      } else if (x0 < z0) {
+        // Y Z X order
+        i1 = 0; j1 = 1; k1 = 0;
+        i2 = 0; j2 = 1; k2 = 1;
+      } else {
+        // Y X Z order
+        i1 = 0; j1 = 1; k1 = 0;
+        i2 = 1; j2 = 1; k2 = 0;
+      }
+    }
+
+    // Offsets for remaining corners
+    const x1 = x0 - i1 + G3;
+    const y1 = y0 - j1 + G3;
+    const z1 = z0 - k1 + G3;
+    const x2 = x0 - i2 + 2.0 * G3;
+    const y2 = y0 - j2 + 2.0 * G3;
+    const z2 = z0 - k2 + 2.0 * G3;
+    const x3 = x0 - 1.0 + 3.0 * G3;
+    const y3 = y0 - 1.0 + 3.0 * G3;
+    const z3 = z0 - 1.0 + 3.0 * G3;
+
+    // Wrap the integer indices at 256, same as in the other noise functions
+    const ii = i & 255;
+    const jj = j & 255;
+    const kk = k & 255;
+
+    // Initialize accumulators for noise and derivative contributions
+    let n0 = 0, n1 = 0, n2 = 0, n3 = 0;
+    let d0x = 0, d0y = 0, d0z = 0;
+    let d1x = 0, d1y = 0, d1z = 0;
+    let d2x = 0, d2y = 0, d2z = 0;
+    let d3x = 0, d3y = 0, d3z = 0;
+
+    // Helper: for each corner compute contribution if within radius.
+    // The contribution is n = t^4 * (g·(offset)),
+    // and the derivative with respect to x is: dn/dx = t^4 * g_x – 8 * x_i * t^3 * (g·(offset)),
+    // with analogous formulas for y and z.
+    //
+    // Corner 0:
+    const t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+    if (t0 > 0) {
+      const t0_2 = t0 * t0;
+      const t0_4 = t0_2 * t0_2;
+      const gi0 = ii + perm[jj + perm[kk]];
+      const g0x = permGrad3x[gi0];
+      const g0y = permGrad3y[gi0];
+      const g0z = permGrad3z[gi0];
+      const dot0 = g0x * x0 + g0y * y0 + g0z * z0;
+      n0 = t0_4 * dot0;
+      d0x = t0_4 * g0x - 8 * x0 * (t0 * t0_2) * dot0;
+      d0y = t0_4 * g0y - 8 * y0 * (t0 * t0_2) * dot0;
+      d0z = t0_4 * g0z - 8 * z0 * (t0 * t0_2) * dot0;
+    }
+
+    // Corner 1:
+    const t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+    if (t1 > 0) {
+      const t1_2 = t1 * t1;
+      const t1_4 = t1_2 * t1_2;
+      const gi1 = ii + i1 + perm[jj + j1 + perm[kk + k1]];
+      const g1x = permGrad3x[gi1];
+      const g1y = permGrad3y[gi1];
+      const g1z = permGrad3z[gi1];
+      const dot1 = g1x * x1 + g1y * y1 + g1z * z1;
+      n1 = t1_4 * dot1;
+      d1x = t1_4 * g1x - 8 * x1 * (t1 * t1_2) * dot1;
+      d1y = t1_4 * g1y - 8 * y1 * (t1 * t1_2) * dot1;
+      d1z = t1_4 * g1z - 8 * z1 * (t1 * t1_2) * dot1;
+    }
+
+    // Corner 2:
+    const t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+    if (t2 > 0) {
+      const t2_2 = t2 * t2;
+      const t2_4 = t2_2 * t2_2;
+      const gi2 = ii + i2 + perm[jj + j2 + perm[kk + k2]];
+      const g2x = permGrad3x[gi2];
+      const g2y = permGrad3y[gi2];
+      const g2z = permGrad3z[gi2];
+      const dot2 = g2x * x2 + g2y * y2 + g2z * z2;
+      n2 = t2_4 * dot2;
+      d2x = t2_4 * g2x - 8 * x2 * (t2 * t2_2) * dot2;
+      d2y = t2_4 * g2y - 8 * y2 * (t2 * t2_2) * dot2;
+      d2z = t2_4 * g2z - 8 * z2 * (t2 * t2_2) * dot2;
+    }
+
+    // Corner 3:
+    const t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+    if (t3 > 0) {
+      const t3_2 = t3 * t3;
+      const t3_4 = t3_2 * t3_2;
+      const gi3 = ii + 1 + perm[jj + 1 + perm[kk + 1]];
+      const g3x = permGrad3x[gi3];
+      const g3y = permGrad3y[gi3];
+      const g3z = permGrad3z[gi3];
+      const dot3 = g3x * x3 + g3y * y3 + g3z * z3;
+      n3 = t3_4 * dot3;
+      d3x = t3_4 * g3x - 8 * x3 * (t3 * t3_2) * dot3;
+      d3y = t3_4 * g3y - 8 * y3 * (t3 * t3_2) * dot3;
+      d3z = t3_4 * g3z - 8 * z3 * (t3 * t3_2) * dot3;
+    }
+
+    // Sum up contributions and apply the final scaling factor.
+    // (As in createNoise3D, the noise is multiplied by 32.)
+    const noise = 32.0 * (n0 + n1 + n2 + n3);
+    const dx = 32.0 * (d0x + d1x + d2x + d3x);
+    const dy = 32.0 * (d0y + d1y + d2y + d3y);
+    const dz = 32.0 * (d0z + d1z + d2z + d3z);
+
+    return { value: noise, dx, dy, dz };
+  };
+}
+
+
 /**
  * Samples the noise field in four dimensions
  * 
