@@ -326,190 +326,6 @@ export function createNoise3D(random: RandomFn = Math.random): NoiseFunction3D {
   };
 }
 
-
-/**
- * A function type that returns both the noise value and its derivative.
- */
-export type NoiseDeriv3D = (x: number, y: number, z: number) => {
-  /** The noise value in the interval [-1,1]. */
-  value: number;
-  /** The derivative with respect to x. */
-  dx: number;
-  /** The derivative with respect to y. */
-  dy: number;
-  /** The derivative with respect to z. */
-  dz: number;
-};
-
-/**
- * Creates a 3D simplex noise function that also computes its analytical derivative.
- *
- * The returned function, when called with coordinates (x, y, z), returns an object with the noise value
- * and its derivative (dx, dy, dz). (Note: the derivative is computed assuming that the integer cell indices
- * remain constant—so at the boundaries between cells the derivative is discontinuous.)
- *
- * @param random a random function returning numbers in [0,1); defaults to Math.random
- * @returns {NoiseDeriv3D}
- */
-export function createNoise3DWithDerivatives(random: RandomFn = Math.random): NoiseDeriv3D {
-  const perm = buildPermutationTable(random);
-  // Precompute gradient components for speed – just like in createNoise3D.
-  const permGrad3x = new Float64Array(perm).map(v => grad3[(v % 12) * 3]);
-  const permGrad3y = new Float64Array(perm).map(v => grad3[(v % 12) * 3 + 1]);
-  const permGrad3z = new Float64Array(perm).map(v => grad3[(v % 12) * 3 + 2]);
-
-  return function noise3DWithDerivatives(x: number, y: number, z: number) {
-    // Skew the input space to determine which simplex cell we're in
-    const s = (x + y + z) * F3;
-    const i = fastFloor(x + s);
-    const j = fastFloor(y + s);
-    const k = fastFloor(z + s);
-    const t = (i + j + k) * G3;
-    const X0 = i - t;
-    const Y0 = j - t;
-    const Z0 = k - t;
-    const x0 = x - X0;
-    const y0 = y - Y0;
-    const z0 = z - Z0;
-
-    // Determine which simplex we are in.
-    let i1: number, j1: number, k1: number;
-    let i2: number, j2: number, k2: number;
-    if (x0 >= y0) {
-      if (y0 >= z0) {
-        // X Y Z order
-        i1 = 1; j1 = 0; k1 = 0;
-        i2 = 1; j2 = 1; k2 = 0;
-      } else if (x0 >= z0) {
-        // X Z Y order
-        i1 = 1; j1 = 0; k1 = 0;
-        i2 = 1; j2 = 0; k2 = 1;
-      } else {
-        // Z X Y order
-        i1 = 0; j1 = 0; k1 = 1;
-        i2 = 1; j2 = 0; k2 = 1;
-      }
-    } else {
-      // x0 < y0
-      if (y0 < z0) {
-        // Z Y X order
-        i1 = 0; j1 = 0; k1 = 1;
-        i2 = 0; j2 = 1; k2 = 1;
-      } else if (x0 < z0) {
-        // Y Z X order
-        i1 = 0; j1 = 1; k1 = 0;
-        i2 = 0; j2 = 1; k2 = 1;
-      } else {
-        // Y X Z order
-        i1 = 0; j1 = 1; k1 = 0;
-        i2 = 1; j2 = 1; k2 = 0;
-      }
-    }
-
-    // Offsets for remaining corners
-    const x1 = x0 - i1 + G3;
-    const y1 = y0 - j1 + G3;
-    const z1 = z0 - k1 + G3;
-    const x2 = x0 - i2 + 2.0 * G3;
-    const y2 = y0 - j2 + 2.0 * G3;
-    const z2 = z0 - k2 + 2.0 * G3;
-    const x3 = x0 - 1.0 + 3.0 * G3;
-    const y3 = y0 - 1.0 + 3.0 * G3;
-    const z3 = z0 - 1.0 + 3.0 * G3;
-
-    // Wrap the integer indices at 256, same as in the other noise functions
-    const ii = i & 255;
-    const jj = j & 255;
-    const kk = k & 255;
-
-    // Initialize accumulators for noise and derivative contributions
-    let n0 = 0, n1 = 0, n2 = 0, n3 = 0;
-    let d0x = 0, d0y = 0, d0z = 0;
-    let d1x = 0, d1y = 0, d1z = 0;
-    let d2x = 0, d2y = 0, d2z = 0;
-    let d3x = 0, d3y = 0, d3z = 0;
-
-    // Helper: for each corner compute contribution if within radius.
-    // The contribution is n = t^4 * (g·(offset)),
-    // and the derivative with respect to x is: dn/dx = t^4 * g_x – 8 * x_i * t^3 * (g·(offset)),
-    // with analogous formulas for y and z.
-    //
-    // Corner 0:
-    const t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
-    if (t0 > 0) {
-      const t0_2 = t0 * t0;
-      const t0_4 = t0_2 * t0_2;
-      const gi0 = ii + perm[jj + perm[kk]];
-      const g0x = permGrad3x[gi0];
-      const g0y = permGrad3y[gi0];
-      const g0z = permGrad3z[gi0];
-      const dot0 = g0x * x0 + g0y * y0 + g0z * z0;
-      n0 = t0_4 * dot0;
-      d0x = t0_4 * g0x - 8 * x0 * (t0 * t0_2) * dot0;
-      d0y = t0_4 * g0y - 8 * y0 * (t0 * t0_2) * dot0;
-      d0z = t0_4 * g0z - 8 * z0 * (t0 * t0_2) * dot0;
-    }
-
-    // Corner 1:
-    const t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
-    if (t1 > 0) {
-      const t1_2 = t1 * t1;
-      const t1_4 = t1_2 * t1_2;
-      const gi1 = ii + i1 + perm[jj + j1 + perm[kk + k1]];
-      const g1x = permGrad3x[gi1];
-      const g1y = permGrad3y[gi1];
-      const g1z = permGrad3z[gi1];
-      const dot1 = g1x * x1 + g1y * y1 + g1z * z1;
-      n1 = t1_4 * dot1;
-      d1x = t1_4 * g1x - 8 * x1 * (t1 * t1_2) * dot1;
-      d1y = t1_4 * g1y - 8 * y1 * (t1 * t1_2) * dot1;
-      d1z = t1_4 * g1z - 8 * z1 * (t1 * t1_2) * dot1;
-    }
-
-    // Corner 2:
-    const t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
-    if (t2 > 0) {
-      const t2_2 = t2 * t2;
-      const t2_4 = t2_2 * t2_2;
-      const gi2 = ii + i2 + perm[jj + j2 + perm[kk + k2]];
-      const g2x = permGrad3x[gi2];
-      const g2y = permGrad3y[gi2];
-      const g2z = permGrad3z[gi2];
-      const dot2 = g2x * x2 + g2y * y2 + g2z * z2;
-      n2 = t2_4 * dot2;
-      d2x = t2_4 * g2x - 8 * x2 * (t2 * t2_2) * dot2;
-      d2y = t2_4 * g2y - 8 * y2 * (t2 * t2_2) * dot2;
-      d2z = t2_4 * g2z - 8 * z2 * (t2 * t2_2) * dot2;
-    }
-
-    // Corner 3:
-    const t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
-    if (t3 > 0) {
-      const t3_2 = t3 * t3;
-      const t3_4 = t3_2 * t3_2;
-      const gi3 = ii + 1 + perm[jj + 1 + perm[kk + 1]];
-      const g3x = permGrad3x[gi3];
-      const g3y = permGrad3y[gi3];
-      const g3z = permGrad3z[gi3];
-      const dot3 = g3x * x3 + g3y * y3 + g3z * z3;
-      n3 = t3_4 * dot3;
-      d3x = t3_4 * g3x - 8 * x3 * (t3 * t3_2) * dot3;
-      d3y = t3_4 * g3y - 8 * y3 * (t3 * t3_2) * dot3;
-      d3z = t3_4 * g3z - 8 * z3 * (t3 * t3_2) * dot3;
-    }
-
-    // Sum up contributions and apply the final scaling factor.
-    // (As in createNoise3D, the noise is multiplied by 32.)
-    const noise = 32.0 * (n0 + n1 + n2 + n3);
-    const dx = 32.0 * (d0x + d1x + d2x + d3x);
-    const dy = 32.0 * (d0y + d1y + d2y + d3y);
-    const dz = 32.0 * (d0z + d1z + d2z + d3z);
-
-    return { value: noise, dx, dy, dz };
-  };
-}
-
-
 /**
  * Samples the noise field in four dimensions
  * 
@@ -682,3 +498,731 @@ export function buildPermutationTable(random: RandomFn): Uint8Array {
   }
   return p;
 }
+
+
+/**
+ * The output of the noise function with derivatives
+ * 
+ * @property value the noise value in the interval [-1, 1]
+ * @property dx the partial derivative with respect to x
+ * @property dy the partial derivative with respect to y
+ */
+export type NoiseDeriv2DOutput = {
+  value: number;
+  dx: number;
+  dy: number;
+};
+
+/**
+ * Samples the noise field in two dimensions and returns the partial derivatives (dx, dy).
+ * 
+ * Coordinates should be finite, bigger than -2^31 and smaller than 2^31.
+ * @param x
+ * @param y
+ * @param output optional output object to store the result, if not provided, a new one will be created
+ * @returns {NoiseDeriv2DOutput}
+ */
+export type NoiseDerivFunction2D = (x: number, y: number, output?: NoiseDeriv2DOutput) => NoiseDeriv2DOutput;
+
+/**
+ * Creates a 2D simplex noise function that also returns the analytical derivatives:
+ *   value = noise(x, y)
+ *   dx = ∂(noise)/∂x
+ *   dy = ∂(noise)/∂y
+ *
+ * Returns a function that takes (x, y) and returns { value, dx, dy }.
+ * @param random the random function that will be used to build the permutation table
+ * @returns {NoiseDerivFunction2D}
+ */
+export function createNoise2DWithDerivatives(random: RandomFn = Math.random): NoiseDerivFunction2D {
+  const perm = buildPermutationTable(random);
+  // Precompute the x/y gradients for each possible permutation value
+  const permGrad2x = new Float64Array(perm).map(v => grad2[(v % 12) * 2]);
+  const permGrad2y = new Float64Array(perm).map(v => grad2[(v % 12) * 2 + 1]);
+
+  return function noise2DWithDerivatives(x: number, y: number, output?: NoiseDeriv2DOutput): NoiseDeriv2DOutput {
+    // Noise and derivatives that we'll accumulate
+    let value = 0;
+    let dx = 0;
+    let dy = 0;
+
+    // Skew the input space to determine which simplex cell we're in
+    const s = (x + y) * F2;
+    const i = fastFloor(x + s);
+    const j = fastFloor(y + s);
+    const t = (i + j) * G2;
+    const X0 = i - t;
+    const Y0 = j - t;
+
+    // Unskewed distances from the cell origin
+    const x0 = x - X0;
+    const y0 = y - Y0;
+
+    // Determine which simplex triangle we are in
+    let i1, j1;
+    if (x0 > y0) {
+      i1 = 1; j1 = 0;
+    } else {
+      i1 = 0; j1 = 1;
+    }
+
+    // Offsets for the other two corners
+    const x1 = x0 - i1 + G2;
+    const y1 = y0 - j1 + G2;
+    const x2 = x0 - 1.0 + 2.0 * G2;
+    const y2 = y0 - 1.0 + 2.0 * G2;
+
+    // Work out the hashed gradient indices of the three corners
+    const ii = i & 255;
+    const jj = j & 255;
+
+    // -- Corner 0
+    const t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 > 0) {
+      // Precompute the gradient index and the actual gradient
+      const gi0 = ii + perm[jj];
+      const g0x = permGrad2x[gi0];
+      const g0y = permGrad2y[gi0];
+
+      // Contribution (the usual simplex noise formula)
+      const t0sq = t0 * t0;        // t0^2
+      const t0p4 = t0sq * t0sq;    // t0^4
+      const dot0 = g0x * x0 + g0y * y0;
+      const n0 = t0p4 * dot0;
+
+      // Derivatives:
+      //
+      // t0 = 0.5 - x0^2 - y0^2
+      // dt0/dx = -2 * x0
+      // dt0/dy = -2 * y0
+      //
+      // ∂n0/∂x = ∂/∂x [ t0^4 * (g0x*x0 + g0y*y0) ]
+      //        = (4 * t0^3 * dt0/dx) * (g0x*x0 + g0y*y0)
+      //          + t0^4 * g0x * (∂x0/∂x)
+      // Since x0 = x - X0, (∂x0/∂x) = 1
+      //
+      // Putting it together:
+      const t0cubic = t0sq * t0;   // t0^3
+      const dT0dx = -2.0 * x0;
+      const dT0dy = -2.0 * y0;
+
+      const dn0dx = 4.0 * t0cubic * dT0dx * dot0 + t0p4 * g0x;
+      const dn0dy = 4.0 * t0cubic * dT0dy * dot0 + t0p4 * g0y;
+
+      // Accumulate
+      value += n0;
+      dx += dn0dx;
+      dy += dn0dy;
+    }
+
+    // -- Corner 1
+    const t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 > 0) {
+      const gi1 = ii + i1 + perm[jj + j1];
+      const g1x = permGrad2x[gi1];
+      const g1y = permGrad2y[gi1];
+
+      const t1sq = t1 * t1;
+      const t1p4 = t1sq * t1sq;
+      const dot1 = g1x * x1 + g1y * y1;
+      const n1 = t1p4 * dot1;
+
+      const t1cubic = t1sq * t1;
+      const dT1dx = -2.0 * x1; // because x1 depends on x
+      const dT1dy = -2.0 * y1; // because y1 depends on y
+
+      const dn1dx = 4.0 * t1cubic * dT1dx * dot1 + t1p4 * g1x;
+      const dn1dy = 4.0 * t1cubic * dT1dy * dot1 + t1p4 * g1y;
+
+      value += n1;
+      dx += dn1dx;
+      dy += dn1dy;
+    }
+
+    // -- Corner 2
+    const t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 > 0) {
+      const gi2 = (ii + 1) + perm[jj + 1];
+      const g2x = permGrad2x[gi2];
+      const g2y = permGrad2y[gi2];
+
+      const t2sq = t2 * t2;
+      const t2p4 = t2sq * t2sq;
+      const dot2 = g2x * x2 + g2y * y2;
+      const n2 = t2p4 * dot2;
+
+      const t2cubic = t2sq * t2;
+      const dT2dx = -2.0 * x2;
+      const dT2dy = -2.0 * y2;
+
+      const dn2dx = 4.0 * t2cubic * dT2dx * dot2 + t2p4 * g2x;
+      const dn2dy = 4.0 * t2cubic * dT2dy * dot2 + t2p4 * g2y;
+
+      value += n2;
+      dx += dn2dx;
+      dy += dn2dy;
+    }
+
+    // Scale the final result (the same factor 70 used in standard 2D simplex)
+    value *= 70.0;
+    dx    *= 70.0;
+    dy    *= 70.0;
+
+    if (output) {
+      output.value = value;
+      output.dx = dx;
+      output.dy = dy;
+      return output;
+    }
+    
+    return { value, dx, dy };
+  };
+}
+
+/**
+ * The output of the noise function with derivatives
+ * 
+ * @property value the noise value in the interval [-1, 1]
+ * @property dx the partial derivative with respect to x
+ * @property dy the partial derivative with respect to y
+ * @property dz the partial derivative with respect to z
+ */
+export type NoiseDeriv3DOutput = {
+  value: number;
+  dx: number;
+  dy: number;
+  dz: number;
+};
+
+/**
+ * Samples the noise field in three dimensions and returns the partial derivatives (dx, dy, dz).
+ * 
+ * Coordinates should be finite, bigger than -2^31 and smaller than 2^31.
+ * @param x
+ * @param y
+ * @param z
+ * @param output
+ * @returns a number in the interval [-1, 1]
+ */
+export type NoiseDerivFunction3D = (x: number, y: number, z: number, output?: NoiseDeriv3DOutput) => NoiseDeriv3DOutput;
+
+
+/**
+ * Creates a 3D Simplex noise function that also returns partial derivatives (dx, dy, dz).
+ * 
+ * The final noise value is scaled to ~[-1, 1], just like `createNoise3D`.
+ * The derivatives match that same scaling.
+ * 
+ * @param random the random function that will be used to build the permutation table
+ * @returns {NoiseDerivFunction3D}
+ */
+export function createNoise3DWithDerivatives(
+  random: RandomFn = Math.random
+): NoiseDerivFunction3D {
+  // Build the permutation table
+  const perm = buildPermutationTable(random);
+
+  // Precompute the 3D gradients for each possible perm value
+  // i.e. permGrad3x[i] = grad3[(perm[i] % 12)*3 + 0]
+  const permGrad3x = new Float64Array(512);
+  const permGrad3y = new Float64Array(512);
+  const permGrad3z = new Float64Array(512);
+  for (let i = 0; i < 512; i++) {
+    const gIndex = (perm[i] % 12) * 3;
+    permGrad3x[i] = grad3[gIndex + 0];
+    permGrad3y[i] = grad3[gIndex + 1];
+    permGrad3z[i] = grad3[gIndex + 2];
+  }
+
+  return function noise3DWithDerivatives(x: number, y: number, z: number, output?: NoiseDeriv3DOutput): NoiseDeriv3DOutput {
+    // Skew the input space
+    const s = (x + y + z) * F3;
+    const i = fastFloor(x + s);
+    const j = fastFloor(y + s);
+    const k = fastFloor(z + s);
+
+    const t = (i + j + k) * G3;
+    // Unskew
+    const X0 = i - t;
+    const Y0 = j - t;
+    const Z0 = k - t;
+
+    // Distances from cell origin
+    const x0 = x - X0;
+    const y0 = y - Y0;
+    const z0 = z - Z0;
+
+    // Determine simplex region
+    let i1, j1, k1;
+    let i2, j2, k2;
+
+    if (x0 >= y0) {
+      if (y0 >= z0) {
+        // X Y Z order
+        i1 = 1;
+        j1 = 0;
+        k1 = 0;
+        i2 = 1;
+        j2 = 1;
+        k2 = 0;
+      } else if (x0 >= z0) {
+        // X Z Y order
+        i1 = 1;
+        j1 = 0;
+        k1 = 0;
+        i2 = 1;
+        j2 = 0;
+        k2 = 1;
+      } else {
+        // Z X Y order
+        i1 = 0;
+        j1 = 0;
+        k1 = 1;
+        i2 = 1;
+        j2 = 0;
+        k2 = 1;
+      }
+    } else {
+      // x0 < y0
+      if (y0 < z0) {
+        // Z Y X order
+        i1 = 0;
+        j1 = 0;
+        k1 = 1;
+        i2 = 0;
+        j2 = 1;
+        k2 = 1;
+      } else if (x0 < z0) {
+        // Y Z X order
+        i1 = 0;
+        j1 = 1;
+        k1 = 0;
+        i2 = 0;
+        j2 = 1;
+        k2 = 1;
+      } else {
+        // Y X Z order
+        i1 = 0;
+        j1 = 1;
+        k1 = 0;
+        i2 = 1;
+        j2 = 1;
+        k2 = 0;
+      }
+    }
+
+    // Offsets for second corner
+    const x1 = x0 - i1 + G3;
+    const y1 = y0 - j1 + G3;
+    const z1 = z0 - k1 + G3;
+    // Offsets for third corner
+    const x2 = x0 - i2 + 2.0 * G3;
+    const y2 = y0 - j2 + 2.0 * G3;
+    const z2 = z0 - k2 + 2.0 * G3;
+    // Offsets for last corner
+    const x3 = x0 - 1.0 + 3.0 * G3;
+    const y3 = y0 - 1.0 + 3.0 * G3;
+    const z3 = z0 - 1.0 + 3.0 * G3;
+
+    // Hashed gradient indices
+    const ii = i & 255;
+    const jj = j & 255;
+    const kk = k & 255;
+
+    // Contribution accumulators
+    let n0 = 0,
+      n1 = 0,
+      n2 = 0,
+      n3 = 0;
+    let dx0 = 0,
+      dy0 = 0,
+      dz0 = 0;
+    let dx1 = 0,
+      dy1 = 0,
+      dz1 = 0;
+    let dx2 = 0,
+      dy2 = 0,
+      dz2 = 0;
+    let dx3 = 0,
+      dy3 = 0,
+      dz3 = 0;
+
+    // For each corner, we compute t_i, the gradient dot, and the derivatives
+
+    // Corner 0
+    {
+      const t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+      if (t0 > 0) {
+        const gi0 = ii + perm[jj + perm[kk]];
+        const gx0 = permGrad3x[gi0];
+        const gy0 = permGrad3y[gi0];
+        const gz0 = permGrad3z[gi0];
+
+        const gDot0 = gx0 * x0 + gy0 * y0 + gz0 * z0;
+        const t0Sq = t0 * t0;
+        const t0Pow4 = t0Sq * t0Sq; // t0^4
+
+        n0 = t0Pow4 * gDot0;
+
+        // Derivative of (t0^4 * (g·(x,y,z))) w.r.t x:
+        // d/dx [t0^4 * gDot0] = (d/dx t0^4)*gDot0 + t0^4*gx0
+        // where t0 = 0.6 - (x^2 + y^2 + z^2),
+        // d/dx t0^4 = 4 * t0^3 * d/dx t0 = 4*t0^3*(-2*x) = -8*t0^3*x
+        // => partial_x = -8*t0^3*x0*gDot0 + t0^4*gx0
+        const t0Cub = t0Sq * t0; // t0^3
+        const coeff = -8.0 * t0Cub; // factor for x*gDot
+        dx0 = coeff * x0 * gDot0 + t0Pow4 * gx0;
+        dy0 = coeff * y0 * gDot0 + t0Pow4 * gy0;
+        dz0 = coeff * z0 * gDot0 + t0Pow4 * gz0;
+      }
+    }
+
+    // Corner 1
+    {
+      const t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+      if (t1 > 0) {
+        const gi1 = ii + i1 + perm[jj + j1 + perm[kk + k1]];
+        const gx1 = permGrad3x[gi1];
+        const gy1 = permGrad3y[gi1];
+        const gz1 = permGrad3z[gi1];
+
+        const gDot1 = gx1 * x1 + gy1 * y1 + gz1 * z1;
+        const t1Sq = t1 * t1;
+        const t1Pow4 = t1Sq * t1Sq;
+
+        n1 = t1Pow4 * gDot1;
+
+        const t1Cub = t1Sq * t1;
+        const coeff = -8.0 * t1Cub;
+        dx1 = coeff * x1 * gDot1 + t1Pow4 * gx1;
+        dy1 = coeff * y1 * gDot1 + t1Pow4 * gy1;
+        dz1 = coeff * z1 * gDot1 + t1Pow4 * gz1;
+      }
+    }
+
+    // Corner 2
+    {
+      const t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+      if (t2 > 0) {
+        const gi2 = ii + i2 + perm[jj + j2 + perm[kk + k2]];
+        const gx2 = permGrad3x[gi2];
+        const gy2 = permGrad3y[gi2];
+        const gz2 = permGrad3z[gi2];
+
+        const gDot2 = gx2 * x2 + gy2 * y2 + gz2 * z2;
+        const t2Sq = t2 * t2;
+        const t2Pow4 = t2Sq * t2Sq;
+
+        n2 = t2Pow4 * gDot2;
+
+        const t2Cub = t2Sq * t2;
+        const coeff = -8.0 * t2Cub;
+        dx2 = coeff * x2 * gDot2 + t2Pow4 * gx2;
+        dy2 = coeff * y2 * gDot2 + t2Pow4 * gy2;
+        dz2 = coeff * z2 * gDot2 + t2Pow4 * gz2;
+      }
+    }
+
+    // Corner 3
+    {
+      const t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+      if (t3 > 0) {
+        const gi3 = ii + 1 + perm[jj + 1 + perm[kk + 1]];
+        const gx3 = permGrad3x[gi3];
+        const gy3 = permGrad3y[gi3];
+        const gz3 = permGrad3z[gi3];
+
+        const gDot3 = gx3 * x3 + gy3 * y3 + gz3 * z3;
+        const t3Sq = t3 * t3;
+        const t3Pow4 = t3Sq * t3Sq;
+
+        n3 = t3Pow4 * gDot3;
+
+        const t3Cub = t3Sq * t3;
+        const coeff = -8.0 * t3Cub;
+        dx3 = coeff * x3 * gDot3 + t3Pow4 * gx3;
+        dy3 = coeff * y3 * gDot3 + t3Pow4 * gy3;
+        dz3 = coeff * z3 * gDot3 + t3Pow4 * gz3;
+      }
+    }
+
+    // Sum up contributions
+    const value = n0 + n1 + n2 + n3;
+    const dx = dx0 + dx1 + dx2 + dx3;
+    const dy = dy0 + dy1 + dy2 + dy3;
+    const dz = dz0 + dz1 + dz2 + dz3;
+
+    // The original 3D simplex scaling factor is 32.0 in this library
+    // (makes final output ~in [-1,1]).
+    const scale = 32.0;
+
+    if (output) {
+      output.value = scale * value;
+      output.dx = scale * dx;
+      output.dy = scale * dy;
+      output.dz = scale * dz;
+      return output;
+    }
+
+    return {
+      value: scale * value,
+      dx: scale * dx,
+      dy: scale * dy,
+      dz: scale * dz,
+    };
+  };
+}
+
+
+/**
+ * The output of the noise function with derivatives
+ * 
+ * @property value the noise value in the interval [-1, 1]
+ * @property dx the partial derivative with respect to x
+ * @property dy the partial derivative with respect to y
+ * @property dz the partial derivative with respect to z
+ * @property dw the partial derivative with respect to w
+ */
+export type NoiseDeriv4DOutput = {
+  value: number;
+  dx: number;
+  dy: number;
+  dz: number;
+  dw: number;
+};
+
+/**
+ * Samples the noise field in four dimensions and returns the partial derivatives (dx, dy, dz, dw).
+ *
+ * Coordinates should be finite, bigger than -2^31 and smaller than 2^31.
+ * @param x
+ * @param y
+ * @param z
+ * @param w
+ * @param output (optional) an object to re-use for the result, so as to avoid allocations
+ * @returns {NoiseDeriv4DOutput}
+ */
+export type NoiseDerivFunction4D = (
+  x: number,
+  y: number,
+  z: number,
+  w: number,
+  output?: NoiseDeriv4DOutput
+) => NoiseDeriv4DOutput;
+
+/**
+ * Creates a 4D Simplex noise function that also computes its analytical partial derivatives.
+ *
+ * @param random the random function that will be used to build the permutation table
+ * @returns {NoiseDerivFunction4D}
+ */
+export function createNoise4DWithDerivatives(random: RandomFn = Math.random): NoiseDerivFunction4D {
+  // Build the standard permutation table
+  const perm = buildPermutationTable(random);
+
+  // Precompute gradient indices for each possible value in `perm` (0..511).
+  // Because the default grad4 array has 32 different grad vectors for 4D, we do `perm[i] % 32`.
+  const permGrad4x = new Float64Array(512);
+  const permGrad4y = new Float64Array(512);
+  const permGrad4z = new Float64Array(512);
+  const permGrad4w = new Float64Array(512);
+  for (let i = 0; i < 512; i++) {
+    const gi = (perm[i] % 32) * 4;
+    permGrad4x[i] = grad4[gi + 0];
+    permGrad4y[i] = grad4[gi + 1];
+    permGrad4z[i] = grad4[gi + 2];
+    permGrad4w[i] = grad4[gi + 3];
+  }
+
+  return function noise4DWithDerivatives(
+    x: number,
+    y: number,
+    z: number,
+    w: number,
+    output?: NoiseDeriv4DOutput
+  ): NoiseDeriv4DOutput {
+    // Skew the (x,y,z,w) space
+    const s = (x + y + z + w) * F4; 
+    const i = fastFloor(x + s);
+    const j = fastFloor(y + s);
+    const k = fastFloor(z + s);
+    const l = fastFloor(w + s);
+
+    // Unskew
+    const t = (i + j + k + l) * G4;
+    const X0 = i - t;
+    const Y0 = j - t;
+    const Z0 = k - t;
+    const W0 = l - t;
+
+    // Distances from cell origin
+    const x0 = x - X0;
+    const y0 = y - Y0;
+    const z0 = z - Z0;
+    const w0 = w - W0;
+
+    // 4D simplex region rank ordering
+    let rankx = 0;
+    let ranky = 0;
+    let rankz = 0;
+    let rankw = 0;
+    if (x0 > y0) rankx++; else ranky++;
+    if (x0 > z0) rankx++; else rankz++;
+    if (x0 > w0) rankx++; else rankw++;
+    if (y0 > z0) ranky++; else rankz++;
+    if (y0 > w0) ranky++; else rankw++;
+    if (z0 > w0) rankz++; else rankw++;
+
+    // Offsets for each corner
+    const i1 = rankx >= 3 ? 1 : 0;
+    const j1 = ranky >= 3 ? 1 : 0;
+    const k1 = rankz >= 3 ? 1 : 0;
+    const l1 = rankw >= 3 ? 1 : 0;
+
+    const i2 = rankx >= 2 ? 1 : 0;
+    const j2 = ranky >= 2 ? 1 : 0;
+    const k2 = rankz >= 2 ? 1 : 0;
+    const l2 = rankw >= 2 ? 1 : 0;
+
+    const i3 = rankx >= 1 ? 1 : 0;
+    const j3 = ranky >= 1 ? 1 : 0;
+    const k3 = rankz >= 1 ? 1 : 0;
+    const l3 = rankw >= 1 ? 1 : 0;
+
+    // Position deltas for each corner
+    const x1 = x0 - i1 + G4;
+    const y1 = y0 - j1 + G4;
+    const z1 = z0 - k1 + G4;
+    const w1 = w0 - l1 + G4;
+
+    const x2 = x0 - i2 + 2.0 * G4;
+    const y2 = y0 - j2 + 2.0 * G4;
+    const z2 = z0 - k2 + 2.0 * G4;
+    const w2 = w0 - l2 + 2.0 * G4;
+
+    const x3 = x0 - i3 + 3.0 * G4;
+    const y3 = y0 - j3 + 3.0 * G4;
+    const z3 = z0 - k3 + 3.0 * G4;
+    const w3 = w0 - l3 + 3.0 * G4;
+
+    const x4 = x0 - 1.0 + 4.0 * G4;
+    const y4 = y0 - 1.0 + 4.0 * G4;
+    const z4 = z0 - 1.0 + 4.0 * G4;
+    const w4 = w0 - 1.0 + 4.0 * G4;
+
+    // Hashed gradient indices
+    const ii = i & 255;
+    const jj = j & 255;
+    const kk = k & 255;
+    const ll = l & 255;
+
+    // Corner accumulators
+    let n0 = 0, n1 = 0, n2 = 0, n3 = 0, n4 = 0;
+    let dx0 = 0, dx1 = 0, dx2 = 0, dx3 = 0, dx4 = 0;
+    let dy0 = 0, dy1 = 0, dy2 = 0, dy3 = 0, dy4 = 0;
+    let dz0 = 0, dz1 = 0, dz2 = 0, dz3 = 0, dz4 = 0;
+    let dw0 = 0, dw1 = 0, dw2 = 0, dw3 = 0, dw4 = 0;
+
+    // A small helper to do the repeated derivative logic
+    function cornerContribution(
+      tx: number, ty: number, tz: number, tw: number,
+      cornerIdx: number
+    ) {
+      // t = 0.6 - sum of squares
+      const tVal = 0.6 - (tx * tx + ty * ty + tz * tz + tw * tw);
+      if (tVal <= 0) {
+        return {
+          n: 0, dx: 0, dy: 0, dz: 0, dw: 0
+        };
+      }
+      // Hashed gradient
+      const gx = permGrad4x[cornerIdx];
+      const gy = permGrad4y[cornerIdx];
+      const gz = permGrad4z[cornerIdx];
+      const gw = permGrad4w[cornerIdx];
+
+      // Gradient dot
+      const gDot = gx * tx + gy * ty + gz * tz + gw * tw;
+
+      // t^2, t^3, t^4
+      const t2 = tVal * tVal;
+      const t4 = t2 * t2;      // t^4
+      const t3 = t2 * tVal;    // t^3
+
+      // Contribution
+      const n = t4 * gDot;
+
+      // Derivatives:
+      // dn/d(tx) = ∂/∂(tx) [ t^4 * (grad·(tx,ty,tz,tw)) ]
+      //           = (4 * t^3 * d(t)/d(tx)) * gDot + t^4 * gx
+      // where d(t)/d(tx) = -2*tx
+      const factor = -8.0 * t3;  // 4 * t^3 * -2
+      const dx = factor * tx * gDot + t4 * gx;
+      const dy = factor * ty * gDot + t4 * gy;
+      const dz = factor * tz * gDot + t4 * gz;
+      const dw = factor * tw * gDot + t4 * gw;
+
+      return { n, dx, dy, dz, dw };
+    }
+
+    // Evaluate each corner's contribution
+    {
+      // Corner 0
+      const gi0 = ii + perm[jj + perm[kk + perm[ll]]];
+      const c0 = cornerContribution(x0, y0, z0, w0, gi0);
+      n0 = c0.n; dx0 = c0.dx; dy0 = c0.dy; dz0 = c0.dz; dw0 = c0.dw;
+    }
+    {
+      // Corner 1
+      const gi1 = ii + i1 + perm[jj + j1 + perm[kk + k1 + perm[ll + l1]]];
+      const c1 = cornerContribution(x1, y1, z1, w1, gi1);
+      n1 = c1.n; dx1 = c1.dx; dy1 = c1.dy; dz1 = c1.dz; dw1 = c1.dw;
+    }
+    {
+      // Corner 2
+      const gi2 = ii + i2 + perm[jj + j2 + perm[kk + k2 + perm[ll + l2]]];
+      const c2 = cornerContribution(x2, y2, z2, w2, gi2);
+      n2 = c2.n; dx2 = c2.dx; dy2 = c2.dy; dz2 = c2.dz; dw2 = c2.dw;
+    }
+    {
+      // Corner 3
+      const gi3 = ii + i3 + perm[jj + j3 + perm[kk + k3 + perm[ll + l3]]];
+      const c3 = cornerContribution(x3, y3, z3, w3, gi3);
+      n3 = c3.n; dx3 = c3.dx; dy3 = c3.dy; dz3 = c3.dz; dw3 = c3.dw;
+    }
+    {
+      // Corner 4
+      const gi4 = ii + 1 + perm[jj + 1 + perm[kk + 1 + perm[ll + 1]]];
+      const c4 = cornerContribution(x4, y4, z4, w4, gi4);
+      n4 = c4.n; dx4 = c4.dx; dy4 = c4.dy; dz4 = c4.dz; dw4 = c4.dw;
+    }
+
+    // Sum contributions
+    let value = n0 + n1 + n2 + n3 + n4;
+    let dx    = dx0 + dx1 + dx2 + dx3 + dx4;
+    let dy    = dy0 + dy1 + dy2 + dy3 + dy4;
+    let dz    = dz0 + dz1 + dz2 + dz3 + dz4;
+    let dw    = dw0 + dw1 + dw2 + dw3 + dw4;
+
+    // Scale it to ~[-1, 1], consistent with createNoise4D
+    const scale = 27.0;
+    value *= scale;
+    dx    *= scale;
+    dy    *= scale;
+    dz    *= scale;
+    dw    *= scale;
+
+    if (!output) {
+      return { value, dx, dy, dz, dw };
+    }
+    // Re-use the output object
+    output.value = value;
+    output.dx = dx;
+    output.dy = dy;
+    output.dz = dz;
+    output.dw = dw;
+    return output;
+  };
+}
+
+
