@@ -525,12 +525,8 @@ export type NoiseDeriv2DOutput = {
 export type NoiseDerivFunction2D = (x: number, y: number, output?: NoiseDeriv2DOutput) => NoiseDeriv2DOutput;
 
 /**
- * Creates a 2D simplex noise function that also returns the analytical derivatives:
- *   value = noise(x, y)
- *   dx = ∂(noise)/∂x
- *   dy = ∂(noise)/∂y
- *
- * Returns a function that takes (x, y) and returns { value, dx, dy }.
+ * Creates a 2D noise function with derivatives
+ * 
  * @param random the random function that will be used to build the permutation table
  * @returns {NoiseDerivFunction2D}
  */
